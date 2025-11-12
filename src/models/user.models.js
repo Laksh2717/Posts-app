@@ -92,3 +92,5 @@ userSchema.methods.generateRefreshToken = function () {
 const User = mongoose.model("User", userSchema);
 
 export default User;
+
+// Generally access token short lived hote hai compoared to refresh token. 
