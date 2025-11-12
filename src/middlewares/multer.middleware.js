@@ -19,3 +19,5 @@ export default upload;
 // Wo storage method, aapko local path return krta hai.
 
 // Cb matlab callback.
+
+// Ham ya to disk ma store kr sakte hai ya memory ma, but large files upload hone pr memory bhar jaayegi isliye disk ma store krte hai.
