@@ -18,8 +18,7 @@ const uploadOnCloudinary = async (localFilePath) => {
     fs.unlinkSync(localFilePath)   // remove file after successfull file upload.
     return response;   // Ham pura ka pura response hi retun kr dete hai user ko jo chaiye hoga wo usme se le lega. mostly url lega wo.
   } 
-  catch (error) {
-    // console.log(error)
+  catch {
     fs.unlinkSync(localFilePath)    // removes locally saved temporary file.
     return null;    // can also throw some error.
     // Lekin ab koi bhi is method ko use kr rha hai i.e. cloudinary method ko, to itna hame pata hai ki file local server pe to upload ho chuki hai, to matlab wo upload ho chuki hai, to hame kya krna chaiye for security purpose, us file ko server se hata dena chaiye, taki koi corrupted ya malicious file na reh jaaye server pe. Aur ham ye unlink process sync karayenge. 

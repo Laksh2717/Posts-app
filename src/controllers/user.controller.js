@@ -4,6 +4,7 @@ import ApiError from "../utils/apiError.js"
 import ApiResponse from "../utils/apiResponse.js"
 import User from "../models/user.models.js";
 import uploadOnCloudinary from "../utils/cloudinary.js";
+import fs from "fs"
 
 export const registerUser = asyncHandler(async (req, res) => {
   // get user details from frontend.
@@ -17,6 +18,10 @@ export const registerUser = asyncHandler(async (req, res) => {
   // return that user
 
   const {username, fullName, email, password} = req.body;
+  const avatarLocalPath = req.files?.avatar?.[0]?.path;
+  const coverImageLocalPath = req.files?.coverImage?.[0]?.path;
+  // we get access to req.files due to multer middleware which we added in our route.
+
   const errors = [];
 
   if (isEmpty(username)) errors.push("username is required")
@@ -25,17 +30,20 @@ export const registerUser = asyncHandler(async (req, res) => {
   if (isEmpty(email)) errors.push("email is required")
   if (!isEmailValid(email)) errors.push("Invalid email")
   if (!isPasswordValid(password)) errors.push("Password should be of atleast 6 characters")
+  if (!avatarLocalPath) errors.push("Avatar file is required")
 
-  if (errors.length > 0) throw new ApiError(400, errors.join(", "));
+  if (errors.length > 0) {
+    if (avatarLocalPath) fs.unlinkSync(avatarLocalPath) 
+    if (coverImageLocalPath) fs.unlinkSync(coverImageLocalPath)
+    throw new ApiError(400, errors.join(", ")) 
+  }
 
   const existedUser = await User.findOne({ $or : [{username}, {email}] })
-  if (existedUser) throw new ApiError(400, "User with email or username already exists")
-
-  const avatarLocalPath = req.files?.avatar?.[0]?.path;
-  const coverImageLocalPath = req.files?.coverImage?.[0]?.path;
-  // we get access to req.files due to multer middleware which we added in our route.
-
-  if (!avatarLocalPath) throw new ApiError(400, "Avatar file is required")
+  if (existedUser) {
+    if (avatarLocalPath) fs.unlinkSync(avatarLocalPath) 
+    if (coverImageLocalPath) fs.unlinkSync(coverImageLocalPath)
+    throw new ApiError(400, "User with email or username already exists")
+  }
 
   const avatar = await uploadOnCloudinary(avatarLocalPath)   
   const coverImage = await uploadOnCloudinary(coverImageLocalPath)  
