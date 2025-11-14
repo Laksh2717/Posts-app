@@ -32,7 +32,7 @@ const generateAccessAndRefreshTokens = async (userId) => {
 export const refreshAccessToken = asyncHandler(async (req, res) => {
   const incomingRefreshToken =
     req.cookies?.refreshToken || req.body?.refreshToken;
-    // Ho sakta hai koi mobile app use kr rha hai to wo ho sakta hai ki req.body ma RT bheje.
+  // Ho sakta hai koi mobile app use kr rha hai to wo ho sakta hai ki req.body ma RT bheje.
 
   if (!incomingRefreshToken) throw new ApiError(401, "Unauthorized request");
 
@@ -41,23 +41,23 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
       incomingRefreshToken,
       process.env.REFRESH_TOKEN_SECRET
     );
-  
+
     const user = await User.findById(decodedTokenData?._id);
-  
+
     if (!user) throw new ApiError(401, "Invalid refresh token");
-  
+
     if (incomingRefreshToken !== user?.refreshToken)
       throw new ApiError(401, "Rsfresh token is expired or used");
-  
+
     const options = {
       httpOnly: true,
       secure: true,
     };
-  
+
     const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
       user._id
     );
-  
+
     return res
       .status(200)
       .cookie("accessToken", accessToken, options)
@@ -70,7 +70,7 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
         )
       );
   } catch (error) {
-    throw new ApiError(401, error?.message || "Invalid refresh token")
+    throw new ApiError(401, error?.message || "Invalid refresh token");
   }
 });
 
@@ -231,3 +231,93 @@ export const logoutUser = asyncHandler(async (req, res) => {
 });
 
 // Jab tak aapke paas access token hai, tab tak aap koi bhi feature, jaha pe aapki authentication ki requirement hai, waha pe aap access kr sakte ho us resource ko. Example : har kisi ko file upload to nhi krne diya jaa sakta server pe, to let say ki aap authenticated ho login ho, to to aap kr lo, lekin agar login session 15 mins ma hi expire ho gya, security reasons ki vajah se, to phir se 15 min baad aapko login krna padega, to isi point pe aata hai refresh token, to ye refresh token ha db ma bhi store krte hai and user ko bhi dete hai, user ko ham validate access token se hi krte hai, lekin ab use hr baar password daalne ki jarurat nhi padti, agar aapke paas refresh token hai, to ham us refresh token ko apne db k refresh token se match krenge, agar wo same hue, to ham user ko naya access token de denge.
+
+export const changeCurrentPassword = asyncHandler(async (req, res) => {
+  // check if newPassword and confirmPassword are same on frontend, then send newPassword to backend.
+  const { oldPassword, newPassword } = req.body;
+
+  const user = await User.findById(req.user?._id);
+  const isPasswordCorrect = await user.isPasswordCorrect(oldPassword);
+
+  if (!isPasswordCorrect) throw new ApiError(400, "Invalid old password");
+
+  user.password = newPassword;
+  await user.save({ validateBeforeSave: false });
+  // The password will be hashed automatically as we wrote the function using Pre-Hook. if u remember we have used if (!this.isModified(password)), but here we are changing password, so if condition will not run and password will get hashed.
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, {}, "Password changed successfully"));
+});
+
+export const getCurrentUser = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user?._id);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { user }, "Current user fetched successfully"));
+});
+
+export const updateUserDetails = asyncHandler(async (req, res) => {
+  const { fullName, email } = req.body;
+
+  if (!isEmailValid(email)) throw new ApiError(400, "Enter vaid email");
+  if (!fullName) fullName = req.user?.fullName;
+  if (!email) email = req.user?.email;
+
+  const user = await User.findByIdAndUpdate(
+    req.user?._id,
+    { $set: { fullName, email } },
+    { new: true }
+  ).select("-password -refreshToken");
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { user }, "User details updated successfully"));
+});
+
+export const updateUserAvatar = asyncHandler(async (req, res) => {
+  const avatarLocalPath = req.file?.path;
+
+  if (!avatarLocalPath) throw new ApiError(400, "Avatar file is missing");
+
+  const avatar = await uploadOnCloudinary(avatarLocalPath);
+
+  if (!avatar.url) throw new ApiError(400, "Error while uploading avatar");
+
+  const user = await User.findByIdAndUpdate(
+    req.user?._id,
+    { $set: { avatar: avatar.url } },
+    { new: true }
+  ).select("-password -refreshToken");
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { user }, "Avatar updated successfully"));
+});
+
+export const updateUserCoverImage = asyncHandler(async (req, res) => {
+  const coverImageLocalPath = req.file?.path;
+
+  if (!coverImageLocalPath)
+    throw new ApiError(400, "Cover image file is missing");
+
+  const coverImage = await uploadOnCloudinary(coverImageLocalPath);
+
+  if (!coverImage.url)
+    throw new ApiError(400, "Error while uploading cover image");
+
+  const user = await User.findByIdAndUpdate(
+    req.user?._id,
+    { $set: { coverImage: coverImage.url } },
+    { new: true }
+  ).select("-password -refreshToken");
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { user }, "Cover image updated successfully"));
+});
+
+// Kahi pr bhi koi file update kr rhe hai na to uske alag controllers rkhna alag endpoints rkhna, ye jyada achcha rhta hai user sirf apni image update krna chahta hai pura user wapas save krte hai to text data bhi baar baar jaata hai to isse kafi congestion kam hota hai network ma.
+
+// Ab file update ma middlewares ka dhyan rkhna padta hai, pehla middleware ham multer use krenge taki user ki uploaded file hame mil paaye, phir hame check krna hoga ki user logged in to hai, to verifyjwt bhi use hoga.
