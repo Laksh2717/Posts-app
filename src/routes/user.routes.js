@@ -4,6 +4,10 @@ import {
   loginUser,
   logoutUser,
   refreshAccessToken,
+  changeCurrentPassword,
+  updateUserDetails,
+  getUserProfile,
+  getUserFriends,
 } from "../controllers/user.controller.js";
 import upload from "../middlewares/multer.middleware.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
@@ -30,4 +34,10 @@ export default router;
 // why post request to /logout and not get ?
 // GET requests are intended to be "safe" operations, meaning they should only retrieve data and not change anything on the server. Clicking a link or visiting a URL is a GET request.
 // POST requests are used to change the state on the server.
+
+router.route("/change-password").post(verifyJWT, changeCurrentPassword);
+router.route("/update-account").post(verifyJWT, updateUserDetails);
+
+router.route("/:username").get(verifyJWT, getUserProfile)
+router.route("/:username/friends").get(verifyJWT, getUserFriends)
 

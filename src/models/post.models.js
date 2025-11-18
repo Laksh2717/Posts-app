@@ -12,14 +12,12 @@ const postSchema = Schema(
       required: true,
       trim: true,
     },
+    image: {
+      type: String,
+    },
     likes: {
       type: Number,
       default: 0,
-    },
-    visibility: {
-      type: String,
-      required: true,
-      enum: ["Public", "Private"],
     },
     owner: {
       type: Schema.Types.ObjectId,

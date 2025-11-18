@@ -3,6 +3,7 @@ import {
   isEmpty,
   isPasswordValid,
   isEmailValid,
+  isUsernameValid,
 } from "../utils/validations.js";
 import ApiError from "../utils/apiError.js";
 import ApiResponse from "../utils/apiResponse.js";
@@ -98,6 +99,7 @@ export const registerUser = asyncHandler(async (req, res) => {
   if (isEmpty(fullName)) errors.push("fullName is required");
   if (isEmpty(password)) errors.push("password is required");
   if (isEmpty(email)) errors.push("email is required");
+  if (!isUsernameValid(username)) errors.push("Invalid username");
   if (!isEmailValid(email)) errors.push("Invalid email");
   if (!isPasswordValid(password))
     errors.push("Password should be of atleast 6 characters");
@@ -321,3 +323,245 @@ export const updateUserCoverImage = asyncHandler(async (req, res) => {
 // Kahi pr bhi koi file update kr rhe hai na to uske alag controllers rkhna alag endpoints rkhna, ye jyada achcha rhta hai user sirf apni image update krna chahta hai pura user wapas save krte hai to text data bhi baar baar jaata hai to isse kafi congestion kam hota hai network ma.
 
 // Ab file update ma middlewares ka dhyan rkhna padta hai, pehla middleware ham multer use krenge taki user ki uploaded file hame mil paaye, phir hame check krna hoga ki user logged in to hai, to verifyjwt bhi use hoga.
+
+export const getUserProfile = asyncHandler(async (req, res) => {
+  // get username from url.
+  // use aggregation pipelines to get user information and user posts.
+  const { username } = req.params;
+
+  if (!username?.trim()) throw new ApiError(400, "username is missing");
+
+  const currentUsername = req.user?.username;
+  const currentUserId = req.user?._id;
+
+  const profile = await User.aggregate([
+    {
+      $match: { username },
+    },
+    {
+      $addFields: {
+        isMyProfile: {
+          $cond: {
+            if: { $eq: ["$username", currentUsername] },
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $lookup: {
+        from: "friends",
+        let: {
+          userId: "$_id",
+          currentId: currentUserId,
+        },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $or: [
+                  {
+                    $and: [
+                      { $eq: ["$friend1", "$$userId"] },
+                      { $eq: ["$friend2", "$$currentId"] },
+                    ],
+                  },
+                  {
+                    $and: [
+                      { $eq: ["$friend1", "$$currentId"] },
+                      { $eq: ["$friend2", "$$userId"] },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        as: "friendship",
+      },
+    },
+    {
+      $addFields: {
+        isFriend: {
+          $cond: {
+            if: { $gt: [{ $size: "$friendship" }, 0] },
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $lookup: {
+        from: "posts",
+        localField: "_id",
+        foreignField: "owner",
+        as: "posts",
+      },
+    },
+    {
+      $addFields: {
+        posts: {
+          $cond: {
+            if: {
+              $or: [
+                { $eq: ["$isMyProfile", true] },
+                { $eq: ["$isFriend", true] },
+              ],
+            },
+            then: "$posts",
+            else: [],
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        username: 1,
+        fullName: 1,
+        avatar: 1,
+        coverImage: 1,
+        totalPosts: 1,
+        totalFriends: 1,
+        posts: 1,
+        isFriend: 1,
+        isMyProfile: 1,
+      },
+    },
+  ]);
+
+  if (!profile.length) throw new ApiError(404, "User profile does not exist");
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, profile[0], "User profile fetched successfully")
+    );
+});
+
+// Your pipeline does 2 big lookups for every profile request. Not necessarily bad, but: 1 lookup on friends and 1 lookup on posts. This is normal in social apps, but consider adding "indexes". This DRAMATICALLY improves speed. Without indexes, MongoDB will perform: COLLECTION SCANS (scanning every document) and This becomes slow when collections grow (10k, 50k, 1M docs, etc.). With indexes, MongoDB does: INDEX SCANS and FAST lookup by value and FAST comparison in $expr.
+
+export const getUserFriends = asyncHandler(async (req, res) => {
+  const { username } = req.params;
+
+  if (!username?.trim()) throw new ApiError(400, "username is missing");
+
+  const currentUsername = req.user?.username;
+  const currentUserId = req.user?._id;
+
+  const friends = await User.aggregate([
+    {
+      $match: { username },
+    },
+    {
+      $addFields: {
+        isMyProfile: {
+          $eq: ["$username", currentUsername],
+        },
+      },
+    },
+    {
+      $lookup: {
+        from: "friends",
+        let: {
+          userId: "$_id",
+        },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $or: [
+                  { $eq: ["$friend1", "$$userId"] },
+                  { $eq: ["$friend2", "$$userId"] },
+                ],
+              },
+            },
+          },
+          // Optimization: Project only needed fields to save memory during lookup
+          {
+            $project: {
+              friend1: 1,
+              friend2: 1,
+            },
+          },
+        ],
+        as: "friends",
+      },
+    },
+    {
+      $addFields: {
+        isFriend: {
+          $cond: {
+            if: {
+              $or: [
+                { $in: ["$_id", "$friends.friend1"] },
+                { $in: ["$_id", "$friends.friend2"] },
+              ],
+            },
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        friends: {
+          $map: {
+            input: "$friends",
+            as: "friend",
+            in: {
+              $cond: {
+                if: { $eq: ["$$friend.friend1", "$_id"] },
+                then: "$$friend.friend2",
+                else: "$$friend.friend1",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        friends: {
+          $cond: {
+            if: { $or: ["$isFriend", "$isMyProfile"] },
+            then: "$friends", // Keep the IDs
+            else: [], // Wipe them so that in next pipeline we can save lookup.
+          },
+        },
+      },
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "friends",
+        foreignField: "_id",
+        as: "friends",
+        pipeline: [
+          {
+            $project: {
+              fullName: 1,
+              username: 1,
+              avatar: 1,
+            },
+          },
+        ],
+      },
+    },
+    {
+      $project: {
+        friends: 1,
+        isMyProfile: 1,
+        isFriend: 1,
+      },
+    },
+  ]);
+
+  if (!friends.length) return res.json(new ApiResponse(200, {}, "No friends found"))
+
+  return res
+  .status(200)
+  .json(new ApiResponse(200, friends[0], "User's friends fetched successfully"))
+});

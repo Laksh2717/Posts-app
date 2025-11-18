@@ -40,11 +40,7 @@ const userSchema = new Schema(
       type: Number,
       default: 0,
     },
-    privatePosts: {
-      type: Number,
-      default: 0,
-    },
-    publicPosts: {
+    totalFriends: {
       type: Number,
       default: 0,
     },
@@ -93,4 +89,4 @@ const User = mongoose.model("User", userSchema);
 
 export default User;
 
-// Generally access token short lived hote hai compoared to refresh token. 
+// Generally access token short lived hote hai compoared to refresh token.
