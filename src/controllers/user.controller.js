@@ -75,23 +75,11 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
   }
 });
 
-// AT and RT ka bas itna sa kaam hai ki user ko baar baar apna email and password na dena pade. To AT jse hi expire hoga, uske baad aapko phir se email password daal k apna AT refresh krna padega. Baadme organizations ne socha ki ham ek nhi 2 tokens use krenge. Ham ek token ko kahi store nhi krenge, sirf user ko bhej denge, and ham doosra token bhi banayenge jise ham session storage ya RT bolte hai and ham use user ko bhi bhejenge and db ma bhi rkhenge, to ab jab user ka AT expire hoga, wese hi phir authorized pages pe 401 request aayegi, to ab frontend wale log kya kr sakte hai ki jse hi user ko 401 request aaye wese hi user ko ye bolne ki jagah ki wapas login kro, ham code likhenge ki ek endpoint hit kro and apna AT refresh kra lo. Ab ye naya token kse milega, ham us request ma RT access krenge, phir ham us RT ko verify krenge, agar wo same ho to phir ham naye tokens generate krke phir se session start krte hai i.e. new cookies bhejte hai. And generally AT and RT dono hi naye generate krke bhejte hai.
-
 export const registerUser = asyncHandler(async (req, res) => {
-  // get user details from frontend.
-  // data validation
-  // check if user already exists.
-  // check for images : avatar required.
-  // upload them to cloudinary.
-  // create user object.
-  // now send data to frontend after removing password and RT field.
-  // check for user creation
-  // return that user
 
   const { username, fullName, email, password } = req.body;
   const avatarLocalPath = req.files?.avatar?.[0]?.path;
   const coverImageLocalPath = req.files?.coverImage?.[0]?.path;
-  // we get access to req.files due to multer middleware which we added in our route.
 
   const errors = [];
 
@@ -110,7 +98,6 @@ export const registerUser = asyncHandler(async (req, res) => {
     if (coverImageLocalPath) fs.unlinkSync(coverImageLocalPath);
     throw new ApiError(400, errors.join(", "));
   }
-  // when a user sends empty request, errors are thrown but if he had uploaded image then it will stay in fs, as cloudinary code never run and unlink does not happen.
 
   const existedUser = await User.findOne({ $or: [{ username }, { email }] });
   if (existedUser) {
@@ -121,8 +108,6 @@ export const registerUser = asyncHandler(async (req, res) => {
 
   const avatar = await uploadOnCloudinary(avatarLocalPath);
   const coverImage = await uploadOnCloudinary(coverImageLocalPath);
-  // this will return complete resonse object and not url.
-  // if coverImageLocalPath is null or undefined, then this method will return null as we wrote in the uploadOnCloudinary function.
 
   if (!avatar) throw new ApiError(400, "Failed to upload Avatar");
 
@@ -152,14 +137,6 @@ export const registerUser = asyncHandler(async (req, res) => {
       )
     );
 });
-
-// note that we are returning data in this post request which is generally meant to save some data. why ??
-
-// When you create a user, your database (e.g., MongoDB) generates a unique _id for that new user. The frontend (your web or mobile app) does not know this ID until the server sends it back. Without this ID, the frontend can't do anything else with that user, such as: Navigate to the new user's profile page (e.g., /profile/60f8...) or Send a request to update this specific user's details or Store the new user's full data in its global state (like in Redux or React Context).
-
-// so if we will not return this data here, we will have to make an extra call to get request after creating the user to get its information.
-
-// in postman, while checking code, Body se ham form data bhi bhej sakte hai, ham x-form-data bhi sakte hai jo ki urlencoded hai, lekin is urlencoded ma ham files nhi bhej sakte, ham yaha raw data bhejenge, and raw ma bhi json. Ab ye raw json ma bhi files nhi bhej sakte, isliye jab files bhejni ho tab form data use kro.
 
 export const loginUser = asyncHandler(async (req, res) => {
   // req.body => data => username or email and password
@@ -231,8 +208,6 @@ export const logoutUser = asyncHandler(async (req, res) => {
     .clearCookie("refreshToken", options)
     .json(new ApiResponse(200, {}, "User logged out"));
 });
-
-// Jab tak aapke paas access token hai, tab tak aap koi bhi feature, jaha pe aapki authentication ki requirement hai, waha pe aap access kr sakte ho us resource ko. Example : har kisi ko file upload to nhi krne diya jaa sakta server pe, to let say ki aap authenticated ho login ho, to to aap kr lo, lekin agar login session 15 mins ma hi expire ho gya, security reasons ki vajah se, to phir se 15 min baad aapko login krna padega, to isi point pe aata hai refresh token, to ye refresh token ha db ma bhi store krte hai and user ko bhi dete hai, user ko ham validate access token se hi krte hai, lekin ab use hr baar password daalne ki jarurat nhi padti, agar aapke paas refresh token hai, to ham us refresh token ko apne db k refresh token se match krenge, agar wo same hue, to ham user ko naya access token de denge.
 
 export const changeCurrentPassword = asyncHandler(async (req, res) => {
   // check if newPassword and confirmPassword are same on frontend, then send newPassword to backend.
@@ -320,13 +295,7 @@ export const updateUserCoverImage = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, { user }, "Cover image updated successfully"));
 });
 
-// Kahi pr bhi koi file update kr rhe hai na to uske alag controllers rkhna alag endpoints rkhna, ye jyada achcha rhta hai user sirf apni image update krna chahta hai pura user wapas save krte hai to text data bhi baar baar jaata hai to isse kafi congestion kam hota hai network ma.
-
-// Ab file update ma middlewares ka dhyan rkhna padta hai, pehla middleware ham multer use krenge taki user ki uploaded file hame mil paaye, phir hame check krna hoga ki user logged in to hai, to verifyjwt bhi use hoga.
-
 export const getUserProfile = asyncHandler(async (req, res) => {
-  // get username from url.
-  // use aggregation pipelines to get user information and user posts.
   const { username } = req.params;
 
   if (!username?.trim()) throw new ApiError(400, "username is missing");
@@ -440,15 +409,12 @@ export const getUserProfile = asyncHandler(async (req, res) => {
     );
 });
 
-// Your pipeline does 2 big lookups for every profile request. Not necessarily bad, but: 1 lookup on friends and 1 lookup on posts. This is normal in social apps, but consider adding "indexes". This DRAMATICALLY improves speed. Without indexes, MongoDB will perform: COLLECTION SCANS (scanning every document) and This becomes slow when collections grow (10k, 50k, 1M docs, etc.). With indexes, MongoDB does: INDEX SCANS and FAST lookup by value and FAST comparison in $expr.
-
 export const getUserFriends = asyncHandler(async (req, res) => {
   const { username } = req.params;
 
   if (!username?.trim()) throw new ApiError(400, "username is missing");
 
   const currentUsername = req.user?.username;
-  const currentUserId = req.user?._id;
 
   const friends = await User.aggregate([
     {
@@ -565,3 +531,4 @@ export const getUserFriends = asyncHandler(async (req, res) => {
   .status(200)
   .json(new ApiResponse(200, friends[0], "User's friends fetched successfully"))
 });
+
