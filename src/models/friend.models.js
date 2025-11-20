@@ -2,18 +2,23 @@ import mongoose, { Schema } from "mongoose";
 
 const friendSchema = Schema(
   {
-    friend1: {
+    sender: {
       type: Schema.Types.ObjectId,
       ref: "User",
     },
-    friend2: {
+    receiver: {
       type: Schema.Types.ObjectId,
       ref: "User",
     },
+    status: {
+      type: String,
+      default: "noStatus",
+      enum: ["accepted", "rejected", "pending", "noStatus"]
+    }
   },
   { timeStamps: true }
 );
 
-const Friend = mongoose.Model("Friend", friendSchema);
+const Friend = mongoose.model("Friend", friendSchema);
 
 export default Friend;

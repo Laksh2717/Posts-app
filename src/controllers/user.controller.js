@@ -11,6 +11,9 @@ import User from "../models/user.models.js";
 import uploadOnCloudinary from "../utils/cloudinary.js";
 import fs from "fs";
 import jwt from "jsonwebtoken";
+import Post from "../models/post.models.js";
+import Friend from "../models/friend.models.js";
+import mongoose from "mongoose";
 
 const generateAccessAndRefreshTokens = async (userId) => {
   try {
@@ -76,7 +79,6 @@ export const refreshAccessToken = asyncHandler(async (req, res) => {
 });
 
 export const registerUser = asyncHandler(async (req, res) => {
-
   const { username, fullName, email, password } = req.body;
   const avatarLocalPath = req.files?.avatar?.[0]?.path;
   const coverImageLocalPath = req.files?.coverImage?.[0]?.path;
@@ -303,6 +305,8 @@ export const getUserProfile = asyncHandler(async (req, res) => {
   const currentUsername = req.user?.username;
   const currentUserId = req.user?._id;
 
+  if (!currentUserId) throw new ApiError(401, "Unauthorized request");
+
   const profile = await User.aggregate([
     {
       $match: { username },
@@ -332,14 +336,16 @@ export const getUserProfile = asyncHandler(async (req, res) => {
                 $or: [
                   {
                     $and: [
-                      { $eq: ["$friend1", "$$userId"] },
-                      { $eq: ["$friend2", "$$currentId"] },
+                      { $eq: ["$sender", "$$userId"] },
+                      { $eq: ["$receiver", "$$currentId"] },
+                      { $eq: ["$status", "accepted"] },
                     ],
                   },
                   {
                     $and: [
-                      { $eq: ["$friend1", "$$currentId"] },
-                      { $eq: ["$friend2", "$$userId"] },
+                      { $eq: ["$sender", "$$currentId"] },
+                      { $eq: ["$receiver", "$$userId"] },
+                      { $eq: ["$status", "accepted"] },
                     ],
                   },
                 ],
@@ -416,6 +422,8 @@ export const getUserFriends = asyncHandler(async (req, res) => {
 
   const currentUsername = req.user?.username;
 
+  if (!currentUsername) throw new ApiError(401, "Unauthorized request");
+
   const friends = await User.aggregate([
     {
       $match: { username },
@@ -438,8 +446,18 @@ export const getUserFriends = asyncHandler(async (req, res) => {
             $match: {
               $expr: {
                 $or: [
-                  { $eq: ["$friend1", "$$userId"] },
-                  { $eq: ["$friend2", "$$userId"] },
+                  {
+                    $and: [
+                      { $eq: ["$sender", "$$userId"] },
+                      { $eq: ["$status", "accepted"] },
+                    ],
+                  },
+                  {
+                    $and: [
+                      { $eq: ["$receiver", "$$userId"] },
+                      { $eq: ["$status", "accepted"] },
+                    ],
+                  },
                 ],
               },
             },
@@ -447,8 +465,8 @@ export const getUserFriends = asyncHandler(async (req, res) => {
           // Optimization: Project only needed fields to save memory during lookup
           {
             $project: {
-              friend1: 1,
-              friend2: 1,
+              sender: 1,
+              receiver: 1,
             },
           },
         ],
@@ -461,8 +479,8 @@ export const getUserFriends = asyncHandler(async (req, res) => {
           $cond: {
             if: {
               $or: [
-                { $in: ["$_id", "$friends.friend1"] },
-                { $in: ["$_id", "$friends.friend2"] },
+                { $in: ["$_id", "$friends.sender"] },
+                { $in: ["$_id", "$friends.receiver"] },
               ],
             },
             then: true,
@@ -479,9 +497,9 @@ export const getUserFriends = asyncHandler(async (req, res) => {
             as: "friend",
             in: {
               $cond: {
-                if: { $eq: ["$$friend.friend1", "$_id"] },
-                then: "$$friend.friend2",
-                else: "$$friend.friend1",
+                if: { $eq: ["$$friend.sender", "$_id"] },
+                then: "$$friend.receiver",
+                else: "$$friend.sender",
               },
             },
           },
@@ -525,10 +543,323 @@ export const getUserFriends = asyncHandler(async (req, res) => {
     },
   ]);
 
-  if (!friends.length) return res.json(new ApiResponse(200, {}, "No friends found"))
+  if (!friends.length)
+    return res.json(new ApiResponse(200, {}, "No friends found"));
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, friends[0], "User's friends fetched successfully")
+    );
+});
+
+export const createPost = asyncHandler(async (req, res) => {
+  const currentUserId = req.user?._id;
+  const { title, content } = req.body;
+  const postImageLocalPath = req.file?.path;
+
+  if (!currentUserId) throw new ApiError(401, "Unauthorized request");
+
+  if (!title && !content)
+    throw new ApiError(400, "Title and content are required");
+
+  let postImage;
+  if (!postImageLocalPath) postImage = "";
+  else {
+    postImage = await uploadOnCloudinary(postImageLocalPath);
+    if (!postImage.url)
+      throw new ApiError(400, "Error while uploading post image");
+  }
+
+  const post = await Post.create({
+    title,
+    content,
+    image: postImage.url,
+    owner: currentUserId,
+  });
+
+  const createdPost = await Post.findById(post._id);
+
+  if (!createdPost)
+    throw new ApiError(500, "Something went wrong while creating post");
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { createdPost }, "Post created successfully"));
+});
+
+export const friendsSuggestion = asyncHandler(async (req, res) => {
+  const loggedInUserId = req.user?._id;
+
+  if (!loggedInUserId) throw new ApiError(401, "Unauthorized request");
+
+  const exclusions = await User.aggregate([
+    {
+      $match: {
+        _id: new mongoose.Types.ObjectId(loggedInUserId),
+      },
+    },
+    {
+      $lookup: {
+        from: "friends",
+        let: { userId: "$_id" },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $or: [
+                  {
+                    $and: [
+                      { $eq: ["$sender", "$$userId"] },
+                      {
+                        $or: [
+                          { $eq: ["$status", "accepted"] },
+                          { $eq: ["$status", "pending"] },
+                        ],
+                      },
+                      { $eq: ["$receiver", "$$userId"] },
+                      {
+                        $or: [
+                          { $eq: ["$status", "accepted"] },
+                          { $eq: ["$status", "pending"] },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        as: "exclusions",
+      },
+    },
+    {
+      $addFields: {
+        exclusions: {
+          $map: {
+            input: "$exclusions",
+            as: "exclusion",
+            in: {
+              $cond: {
+                if: { $eq: ["$$exclusion.sender", "$_id"] },
+                then: "$$exclusion.receiver",
+                else: "$$exclusion.sender",
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        allExclusions: {
+          $concatArrays: ["$exclusions", ["$_id"]],
+        },
+      },
+    },
+    {
+      $project: {
+        allExclusions: 1,
+      },
+    },
+  ]);
+
+  const allExclusions = exclusions[0]?.allExclusions || [];
+
+  const suggestedFriends = await User.aggregate([
+    {
+      $match: {
+        _id: { $nin: allExclusions },
+      },
+    },
+    {
+      $sort: {
+        createdAt: -1,
+      },
+    },
+    {
+      $limit: 20,
+    },
+    {
+      $project: {
+        fullName: 1,
+        username: 1,
+        avatar: 1,
+      },
+    },
+  ]);
+
+  if (!suggestedFriends.length)
+    return res.json("No suggestion available at the moment");
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        suggestedFriends,
+        "Friend suggestion fetched successfully"
+      )
+    );
+});
+
+export const sendFriendRequest = asyncHandler(async (req, res) => {
+  const sender = req.user?._id;
+  const receiver = req.body?.receiverId;
+  
+  if (!sender) throw new ApiError(401, "Unauthorized request");
+  if (!receiver) throw new ApiError(400, "Receiver id is required");
+
+  const friendRequest = await Friend.create({
+    sender,
+    receiver,
+    status: "pending",
+  });
+
+  const sentRequest = await Friend.findById(friendRequest._id);
+
+  if (!sentRequest) throw new ApiError(500, "Failed to send friend request");
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, sentRequest, "Friend request sent successfully")
+    );
+});
+
+export const acceptFriendRequest = asyncHandler(async (req, res) => {
+  const receiver = req.user?._id;
+  const sender = req.body?.senderId;
+
+  if (!receiver) throw new ApiError(401, "Unauthorized request");
+
+  const friendRequest = await Friend.findOneAndUpdate(
+    { receiver, sender },
+    { status: "accepted" },
+    { new: true }
+  );
+
+  const acceptedFriendRequest = await Friend.findById(friendRequest._id);
+
+  if (!acceptedFriendRequest)
+    throw new ApiError(500, "Error while accepting friend request");
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        acceptedFriendRequest,
+        "Friend request accepted successfully"
+      )
+    );
+});
+
+export const rejectFriendRequest = asyncHandler(async (req, res) => {
+  const receiver = req.user?._id;
+  const sender = req.body?.senderId;
+
+  if (!receiver) throw new ApiError(401, "Unauthorized request");
+
+  const friendRequest = await Friend.findOneAndUpdate(
+    { receiver, sender },
+    { status: "rejected" },
+    { new: true }
+  );
+
+  const rejectedFriendRequest = await Friend.findById(friendRequest._id);
+
+  if (!rejectedFriendRequest)
+    throw new ApiError(500, "Error while rejecting friend request");
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        rejectedFriendRequest,
+        "Friend request rejected successfully"
+      )
+    );
+});
+
+export const showPendingRequests = asyncHandler(async (req, res) => {
+  const loggedInUserId = req.user?._id;
+
+  if (!loggedInUserId) throw new ApiError(401, "Unauthorized request");
+
+  const pendingRequests = await User.aggregate([
+    {
+      $match: {
+        _id: new mongoose.Types.ObjectId(loggedInUserId),
+      },
+    },
+    {
+      $lookup: {
+        from: "friends",
+        let: {
+          userId: "$_id",
+        },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  { $eq: ["$receiver", "$$userId"] },
+                  { $eq: ["$status", "pending"] },
+                ],
+              },
+            },
+          },
+        ],
+        as: "pendingRequests"
+      },
+    },
+    {
+      $addFields: {
+        pendingRequests: {
+          $map: {
+            input: "$pendingRequests",
+            as: "pr",
+            in: {
+              $cond: {
+                if: {$eq: ["$$pr.sender", "$_id"]},
+                then: "$$pr.receiver",
+                else: "$$pr.sender"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      $lookup: {
+        from: "users",
+        localField: "pendingRequests",
+        foreignField: "_id",
+        as: "pendingRequests",
+        pipeline: [
+          {
+            $project: {
+              fullName: 1,
+              username: 1,
+              avatar: 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      $project: {
+        pendingRequests: 1
+      }
+    }
+  ]);
+
+  if (!pendingRequests.length) return res.status(200).json(new ApiResponse(200, "No pending requests"))
 
   return res
   .status(200)
-  .json(new ApiResponse(200, friends[0], "User's friends fetched successfully"))
+  .json(new ApiResponse(200, pendingRequests, "Pending requests fetched successfully"))
 });
-

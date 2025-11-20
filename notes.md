@@ -42,3 +42,6 @@
 
 - /c rkahna hai /channel rakhna hai wo aapke upar hai.
 
+
+- when in creating posts, user does not give image, the image field is not there in db, so we can add an empty string to image if image not there.
+- update posts
