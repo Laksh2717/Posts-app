@@ -214,10 +214,13 @@ export const logoutUser = asyncHandler(async (req, res) => {
 export const changeCurrentPassword = asyncHandler(async (req, res) => {
   // check if newPassword and confirmPassword are same on frontend, then send newPassword to backend.
   const { oldPassword, newPassword } = req.body;
+  if (!oldPassword || !newPassword) throw new ApiError(400, "old and new passwords are required")
+  if (oldPassword === newPassword) throw new ApiError(400, "Both passwords are same")
 
   const user = await User.findById(req.user?._id);
-  const isPasswordCorrect = await user.isPasswordCorrect(oldPassword);
+  if (!user) throw new ApiError(404, "User not found")
 
+  const isPasswordCorrect = await user.isPasswordCorrect(oldPassword);
   if (!isPasswordCorrect) throw new ApiError(400, "Invalid old password");
 
   user.password = newPassword;
@@ -230,7 +233,13 @@ export const changeCurrentPassword = asyncHandler(async (req, res) => {
 });
 
 export const getCurrentUser = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user?._id);
+  const userId = req.user?._id;
+
+  if (!userId) throw new ApiError(401, "Unauthorized request");
+
+  const user = await User.findById(userId).select("-password -refreshToken")
+
+  if (!user) throw new ApiError(404, "No user found");
 
   return res
     .status(200)
@@ -238,11 +247,11 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
 });
 
 export const updateUserDetails = asyncHandler(async (req, res) => {
-  const { fullName, email } = req.body;
-
-  if (!isEmailValid(email)) throw new ApiError(400, "Enter vaid email");
+  let { fullName, email } = req.body;
   if (!fullName) fullName = req.user?.fullName;
   if (!email) email = req.user?.email;
+
+  if (!isEmailValid(email)) throw new ApiError(400, "Enter vaid email");
 
   const user = await User.findByIdAndUpdate(
     req.user?._id,
@@ -302,8 +311,8 @@ export const getUserProfile = asyncHandler(async (req, res) => {
 
   if (!username?.trim()) throw new ApiError(400, "username is missing");
 
-  const currentUsername = req.user?.username;
   const currentUserId = req.user?._id;
+  const currentUserObjectId = new mongoose.Types.ObjectId(currentUserId);
 
   if (!currentUserId) throw new ApiError(401, "Unauthorized request");
 
@@ -315,7 +324,7 @@ export const getUserProfile = asyncHandler(async (req, res) => {
       $addFields: {
         isMyProfile: {
           $cond: {
-            if: { $eq: ["$username", currentUsername] },
+            if: { $eq: ["$_id", currentUserObjectId] },
             then: true,
             else: false,
           },
@@ -327,7 +336,6 @@ export const getUserProfile = asyncHandler(async (req, res) => {
         from: "friends",
         let: {
           userId: "$_id",
-          currentId: currentUserId,
         },
         pipeline: [
           {
@@ -337,15 +345,25 @@ export const getUserProfile = asyncHandler(async (req, res) => {
                   {
                     $and: [
                       { $eq: ["$sender", "$$userId"] },
-                      { $eq: ["$receiver", "$$currentId"] },
-                      { $eq: ["$status", "accepted"] },
+                      { $eq: ["$receiver", currentUserObjectId] },
+                      {
+                        $or: [
+                          { $eq: ["$status", "accepted"] },
+                          { $eq: ["$status", "pending"] },
+                        ],
+                      },
                     ],
                   },
                   {
                     $and: [
-                      { $eq: ["$sender", "$$currentId"] },
+                      { $eq: ["$sender", currentUserObjectId] },
                       { $eq: ["$receiver", "$$userId"] },
-                      { $eq: ["$status", "accepted"] },
+                      {
+                        $or: [
+                          { $eq: ["$status", "accepted"] },
+                          { $eq: ["$status", "pending"] },
+                        ],
+                      },
                     ],
                   },
                 ],
@@ -353,14 +371,53 @@ export const getUserProfile = asyncHandler(async (req, res) => {
             },
           },
         ],
-        as: "friendship",
+        as: "friendship",  // array of objects
+      },
+    },
+    {
+      $addFields: {
+        friendship: {
+          $first: "$friendship",  // friendship = friendship[0]. array -> object
+        },
       },
     },
     {
       $addFields: {
         isFriend: {
           $cond: {
-            if: { $gt: [{ $size: "$friendship" }, 0] },
+            if: { $eq: ["$friendship.status", "accepted"] },
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        sentPendingRequest: {
+          $cond: {
+            if: {
+              $and: [
+                { $eq: ["$friendship.status", "pending"] },
+                { $eq: ["$friendship.sender", currentUserObjectId] },
+              ],
+            },
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        receivedPendingRequest: {
+          $cond: {
+            if: {
+              $and: [
+                { $eq: ["$friendship.status", "pending"] },
+                { $eq: ["$friendship.receiver", currentUserObjectId] },
+              ],
+            },
             then: true,
             else: false,
           },
@@ -402,6 +459,8 @@ export const getUserProfile = asyncHandler(async (req, res) => {
         posts: 1,
         isFriend: 1,
         isMyProfile: 1,
+        sentPendingRequest: 1,
+        receivedPendingRequest: 1,
       },
     },
   ]);
@@ -423,6 +482,8 @@ export const getUserFriends = asyncHandler(async (req, res) => {
   const currentUsername = req.user?.username;
 
   if (!currentUsername) throw new ApiError(401, "Unauthorized request");
+
+  const currentUserObjectId = new mongoose.Types.ObjectId(req.user._id);
 
   const friends = await User.aggregate([
     {
@@ -479,8 +540,16 @@ export const getUserFriends = asyncHandler(async (req, res) => {
           $cond: {
             if: {
               $or: [
-                { $in: ["$_id", "$friends.sender"] },
-                { $in: ["$_id", "$friends.receiver"] },
+                // { $in: ["$_id", "$friends.sender"] },
+                // { $in: ["$_id", "$friends.receiver"] },
+                { $in: [currentUserObjectId, "$friends.sender"] },
+                { $in: [currentUserObjectId, "$friends.receiver"] },
+
+                // this is a silent error, if you will not use objectId, then it will be false as both will be false in or operator, because a string and oobject id can not be compared, so check twice whenever using ids.
+
+                // also it is a lot of confusion that what to use when, _id or current userobjectid.... so always see which document i have, _id is the current document id and currentuserid is logged in user id, so always think which user id do i need...
+
+                // you can see first i used _id, meaning the current document id and then it didnt work as expected, so then i used currentuserid, then it worked properly. it is because of logical error. you can think about that error. 
               ],
             },
             then: true,
@@ -543,13 +612,33 @@ export const getUserFriends = asyncHandler(async (req, res) => {
     },
   ]);
 
-  if (!friends.length)
-    return res.json(new ApiResponse(200, {}, "No friends found"));
+  if (!friends.length) throw new ApiError(404, "User not found");
+
+  const userData = friends[0];
+
+  if (!userData.isMyProfile && !userData.isFriend)
+    throw new ApiError(
+      403,
+      "You should be friend of the user to see their friends"
+    );
+
+  if (!userData.friends.length)
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          friends: [],
+          isMyProfile: userData.isMyProfile,
+          isFriend: userData.isFriend,
+        },
+        "No friends found"
+      )
+    );
 
   return res
     .status(200)
     .json(
-      new ApiResponse(200, friends[0], "User's friends fetched successfully")
+      new ApiResponse(200, userData, "User's friends fetched successfully")
     );
 });
 
@@ -560,32 +649,38 @@ export const createPost = asyncHandler(async (req, res) => {
 
   if (!currentUserId) throw new ApiError(401, "Unauthorized request");
 
-  if (!title && !content)
+  if (!title || !content)
     throw new ApiError(400, "Title and content are required");
 
-  let postImage;
-  if (!postImageLocalPath) postImage = "";
-  else {
-    postImage = await uploadOnCloudinary(postImageLocalPath);
-    if (!postImage.url)
-      throw new ApiError(400, "Error while uploading post image");
+  let postImageUrl = "";
+
+  if (postImageLocalPath) {
+    try {
+      const postImage = await uploadOnCloudinary(postImageLocalPath);
+
+      if (!postImage?.url) {
+        throw new ApiError(400, "Error while uploading post image");
+      }
+
+      postImageUrl = postImage.url;
+    } catch {
+      fs.unlinkSync(postImageLocalPath);
+    }
   }
 
   const post = await Post.create({
     title,
     content,
-    image: postImage.url,
+    image: postImageUrl,
     owner: currentUserId,
   });
 
-  const createdPost = await Post.findById(post._id);
-
-  if (!createdPost)
+  if (!post)
     throw new ApiError(500, "Something went wrong while creating post");
 
   return res
-    .status(200)
-    .json(new ApiResponse(200, { createdPost }, "Post created successfully"));
+    .status(201)
+    .json(new ApiResponse(201, post, "Post created successfully"));
 });
 
 export const friendsSuggestion = asyncHandler(async (req, res) => {
@@ -617,6 +712,10 @@ export const friendsSuggestion = asyncHandler(async (req, res) => {
                           { $eq: ["$status", "pending"] },
                         ],
                       },
+                    ],
+                  },
+                  {
+                    $and: [
                       { $eq: ["$receiver", "$$userId"] },
                       {
                         $or: [
@@ -665,6 +764,9 @@ export const friendsSuggestion = asyncHandler(async (req, res) => {
     },
   ]);
 
+  // If user doesn't exist
+  if (!exclusions.length) throw new ApiError(404, "User not found");
+
   const allExclusions = exclusions[0]?.allExclusions || [];
 
   const suggestedFriends = await User.aggregate([
@@ -691,15 +793,23 @@ export const friendsSuggestion = asyncHandler(async (req, res) => {
   ]);
 
   if (!suggestedFriends.length)
-    return res.json("No suggestion available at the moment");
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          { suggestedFriends: [] },
+          "No suggestions available at the moment"
+        )
+      );
 
   return res
     .status(200)
     .json(
       new ApiResponse(
         200,
-        suggestedFriends,
-        "Friend suggestion fetched successfully"
+        { suggestedFriends },
+        "Friend suggestions fetched successfully"
       )
     );
 });
@@ -707,7 +817,7 @@ export const friendsSuggestion = asyncHandler(async (req, res) => {
 export const sendFriendRequest = asyncHandler(async (req, res) => {
   const sender = req.user?._id;
   const receiver = req.body?.receiverId;
-  
+
   if (!sender) throw new ApiError(401, "Unauthorized request");
   if (!receiver) throw new ApiError(400, "Receiver id is required");
 
@@ -733,6 +843,7 @@ export const acceptFriendRequest = asyncHandler(async (req, res) => {
   const sender = req.body?.senderId;
 
   if (!receiver) throw new ApiError(401, "Unauthorized request");
+  if (!sender) throw new ApiError(400, "senderId is required");
 
   const friendRequest = await Friend.findOneAndUpdate(
     { receiver, sender },
@@ -761,6 +872,7 @@ export const rejectFriendRequest = asyncHandler(async (req, res) => {
   const sender = req.body?.senderId;
 
   if (!receiver) throw new ApiError(401, "Unauthorized request");
+  if (!sender) throw new ApiError(400, "senderId is required");
 
   const friendRequest = await Friend.findOneAndUpdate(
     { receiver, sender },
@@ -813,7 +925,7 @@ export const showPendingRequests = asyncHandler(async (req, res) => {
             },
           },
         ],
-        as: "pendingRequests"
+        as: "pendingRequests",
       },
     },
     {
@@ -822,16 +934,10 @@ export const showPendingRequests = asyncHandler(async (req, res) => {
           $map: {
             input: "$pendingRequests",
             as: "pr",
-            in: {
-              $cond: {
-                if: {$eq: ["$$pr.sender", "$_id"]},
-                then: "$$pr.receiver",
-                else: "$$pr.sender"
-              }
-            }
-          }
-        }
-      }
+            in: "$$pr.sender",
+          },
+        },
+      },
     },
     {
       $lookup: {
@@ -844,22 +950,35 @@ export const showPendingRequests = asyncHandler(async (req, res) => {
             $project: {
               fullName: 1,
               username: 1,
-              avatar: 1
-            }
-          }
-        ]
-      }
+              avatar: 1,
+            },
+          },
+        ],
+      },
     },
     {
       $project: {
-        pendingRequests: 1
-      }
-    }
+        pendingRequests: 1,
+      },
+    },
   ]);
 
-  if (!pendingRequests.length) return res.status(200).json(new ApiResponse(200, "No pending requests"))
+  // If user doesn't exist
+  if (!pendingRequests.length) throw new ApiError(404, "User not found");
+
+  const userData = pendingRequests[0];
+
+  // If no pending requests, return empty array with consistent structure
+  if (!userData.pendingRequests.length)
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(200, { pendingRequests: [] }, "No pending requests")
+      );
 
   return res
-  .status(200)
-  .json(new ApiResponse(200, pendingRequests, "Pending requests fetched successfully"))
+    .status(200)
+    .json(
+      new ApiResponse(200, userData, "Pending requests fetched successfully")
+    );
 });
