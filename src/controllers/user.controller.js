@@ -34,9 +34,7 @@ const generateAccessAndRefreshTokens = async (userId) => {
 };
 
 export const refreshAccessToken = asyncHandler(async (req, res) => {
-  const incomingRefreshToken =
-    req.cookies?.refreshToken || req.body?.refreshToken;
-  // Ho sakta hai koi mobile app use kr rha hai to wo ho sakta hai ki req.body ma RT bheje.
+  const incomingRefreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
 
   if (!incomingRefreshToken) throw new ApiError(401, "Unauthorized request");
 
@@ -141,16 +139,9 @@ export const registerUser = asyncHandler(async (req, res) => {
 });
 
 export const loginUser = asyncHandler(async (req, res) => {
-  // req.body => data => username or email and password
-  // find the user
-  // password check
-  // AT and RT
-  // send cookie
-
   const { usernameOrEmail, password } = req.body;
 
-  if (!usernameOrEmail)
-    throw new ApiError(400, "username or email is required");
+  if (!usernameOrEmail) throw new ApiError(400, "username or email is required");
 
   const user = await User.findOne({
     $or: [{ username: usernameOrEmail }, { email: usernameOrEmail }],
@@ -159,13 +150,10 @@ export const loginUser = asyncHandler(async (req, res) => {
   if (!user) throw new ApiError(404, "user does not exist");
 
   const isCorrectPassword = await user.isPasswordCorrect(password);
-  // Ispasswordcoorect method User pe nhi hai user pe hai, User model pe mongoose k methods hote hai jse findOne etc, and hamare custom methods instances pe hote hai, jse hamne koi find kiya uske baad jo wo return krega wo ek instance hai.
 
   if (!isCorrectPassword) throw new ApiError(401, "Invalid user credentials");
 
-  const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
-    user._id
-  );
+  const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(user._id);
 
   const loggedInUser = await User.findById(user._id).select(
     "-password -refreshToken"
@@ -175,7 +163,6 @@ export const loginUser = asyncHandler(async (req, res) => {
     httpOnly: true,
     secure: true,
   };
-  // Jo normal cookies hoti hai use frontend se bhi koi bhi modify kr sakta hai, but jse hi hamne httpOnly and secure true krte hai, wese hi ab ye cookies sirf server se bhi modify kr sakte hai frontend se nhi. Ham unhe frontend pe dekh sakte hai modify nhi kr sakte.
 
   return res
     .status(200)
@@ -188,7 +175,6 @@ export const loginUser = asyncHandler(async (req, res) => {
         "User logged in successfully"
       )
     );
-  // Ham apiresponse ma access and refresh token kyu bhej rhe hai jab hamne already cookies set krdi hai, yaha pr ham wo case handle kr rhe hai jaha pr user khud apni taraf se unhe store krna chah rha ho, ho sakta hai wo local storage pe store krna chah rha ho, kyuki ho sakta hai wo mobile app bana rha ho, waha pr cookies set nhi hogi, isiliye ye bhejna ek achchi practice hai halaki depend kta hai ki aap kya krna chahte ho.
 });
 
 export const logoutUser = asyncHandler(async (req, res) => {
@@ -197,7 +183,6 @@ export const logoutUser = asyncHandler(async (req, res) => {
     { $set: { refreshToken: null } },
     { new: true }
   );
-  // Jab verifyjwt successful hoga tabhi ham logoutUser pe pahuchenge, to iska matlab ab req.body ma user add ho chuka hai so we can access req.user in logout.
 
   const options = {
     httpOnly: true,
@@ -212,20 +197,24 @@ export const logoutUser = asyncHandler(async (req, res) => {
 });
 
 export const changeCurrentPassword = asyncHandler(async (req, res) => {
-  // check if newPassword and confirmPassword are same on frontend, then send newPassword to backend.
   const { oldPassword, newPassword } = req.body;
-  if (!oldPassword || !newPassword) throw new ApiError(400, "old and new passwords are required")
+
+  if (!oldPassword || !newPassword) 
+    throw new ApiError(400, "old and new passwords are required")
+
   if (oldPassword === newPassword) throw new ApiError(400, "Both passwords are same")
 
   const user = await User.findById(req.user?._id);
+
   if (!user) throw new ApiError(404, "User not found")
 
   const isPasswordCorrect = await user.isPasswordCorrect(oldPassword);
+
   if (!isPasswordCorrect) throw new ApiError(400, "Invalid old password");
 
   user.password = newPassword;
+
   await user.save({ validateBeforeSave: false });
-  // The password will be hashed automatically as we wrote the function using Pre-Hook. if u remember we have used if (!this.isModified(password)), but here we are changing password, so if condition will not run and password will get hashed.
 
   return res
     .status(200)
@@ -248,6 +237,7 @@ export const getCurrentUser = asyncHandler(async (req, res) => {
 
 export const updateUserDetails = asyncHandler(async (req, res) => {
   let { fullName, email } = req.body;
+
   if (!fullName) fullName = req.user?.fullName;
   if (!email) email = req.user?.email;
 
@@ -312,9 +302,10 @@ export const getUserProfile = asyncHandler(async (req, res) => {
   if (!username?.trim()) throw new ApiError(400, "username is missing");
 
   const currentUserId = req.user?._id;
-  const currentUserObjectId = new mongoose.Types.ObjectId(currentUserId);
 
   if (!currentUserId) throw new ApiError(401, "Unauthorized request");
+
+  const currentUserObjectId = new mongoose.Types.ObjectId(currentUserId);
 
   const profile = await User.aggregate([
     {
@@ -371,13 +362,13 @@ export const getUserProfile = asyncHandler(async (req, res) => {
             },
           },
         ],
-        as: "friendship",  // array of objects
+        as: "friendship",  
       },
     },
     {
       $addFields: {
         friendship: {
-          $first: "$friendship",  // friendship = friendship[0]. array -> object
+          $first: "$friendship", 
         },
       },
     },
@@ -523,7 +514,6 @@ export const getUserFriends = asyncHandler(async (req, res) => {
               },
             },
           },
-          // Optimization: Project only needed fields to save memory during lookup
           {
             $project: {
               sender: 1,
@@ -540,16 +530,8 @@ export const getUserFriends = asyncHandler(async (req, res) => {
           $cond: {
             if: {
               $or: [
-                // { $in: ["$_id", "$friends.sender"] },
-                // { $in: ["$_id", "$friends.receiver"] },
                 { $in: [currentUserObjectId, "$friends.sender"] },
                 { $in: [currentUserObjectId, "$friends.receiver"] },
-
-                // this is a silent error, if you will not use objectId, then it will be false as both will be false in or operator, because a string and oobject id can not be compared, so check twice whenever using ids.
-
-                // also it is a lot of confusion that what to use when, _id or current userobjectid.... so always see which document i have, _id is the current document id and currentuserid is logged in user id, so always think which user id do i need...
-
-                // you can see first i used _id, meaning the current document id and then it didnt work as expected, so then i used currentuserid, then it worked properly. it is because of logical error. you can think about that error. 
               ],
             },
             then: true,
@@ -580,8 +562,8 @@ export const getUserFriends = asyncHandler(async (req, res) => {
         friends: {
           $cond: {
             if: { $or: ["$isFriend", "$isMyProfile"] },
-            then: "$friends", // Keep the IDs
-            else: [], // Wipe them so that in next pipeline we can save lookup.
+            then: "$friends", 
+            else: [], 
           },
         },
       },
@@ -665,6 +647,7 @@ export const createPost = asyncHandler(async (req, res) => {
       postImageUrl = postImage.url;
     } catch {
       fs.unlinkSync(postImageLocalPath);
+      throw new ApiError(500, "Error while uploading image on cloudinary")
     }
   }
 
@@ -677,6 +660,12 @@ export const createPost = asyncHandler(async (req, res) => {
 
   if (!post)
     throw new ApiError(500, "Something went wrong while creating post");
+
+  const postsIncrement = await User.findByIdAndUpdate(
+    currentUserId, { $inc: { totalPosts: 1 } }, { new: true }
+  )
+
+  if (!postsIncrement) throw new ApiError(500, "Error in incrementing user posts")
 
   return res
     .status(201)
@@ -764,7 +753,6 @@ export const friendsSuggestion = asyncHandler(async (req, res) => {
     },
   ]);
 
-  // If user doesn't exist
   if (!exclusions.length) throw new ApiError(404, "User not found");
 
   const allExclusions = exclusions[0]?.allExclusions || [];
@@ -855,6 +843,20 @@ export const acceptFriendRequest = asyncHandler(async (req, res) => {
 
   if (!acceptedFriendRequest)
     throw new ApiError(500, "Error while accepting friend request");
+
+  const receiverFriendsIncrement = await User.findByIdAndUpdate(
+    receiver, { $inc: { totalFriends: 1 } }, { new: true }
+  )
+
+  if (!receiverFriendsIncrement) 
+    throw new ApiError(500, "Error while incrementing receiver's friends")
+
+  const senderFriendsIncrement = await User.findByIdAndUpdate(
+    sender, { $inc: { totalFriends: 1 } }, { new: true }
+  )
+
+  if (!senderFriendsIncrement) 
+    throw new ApiError(500, "Error while incrementing sender's friends")
 
   return res
     .status(200)
@@ -963,12 +965,10 @@ export const showPendingRequests = asyncHandler(async (req, res) => {
     },
   ]);
 
-  // If user doesn't exist
   if (!pendingRequests.length) throw new ApiError(404, "User not found");
 
   const userData = pendingRequests[0];
 
-  // If no pending requests, return empty array with consistent structure
   if (!userData.pendingRequests.length)
     return res
       .status(200)
